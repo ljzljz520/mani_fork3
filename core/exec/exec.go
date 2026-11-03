@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/gookit/color"
 
@@ -18,6 +17,11 @@ type Exec struct {
 	Projects []dao.Project
 	Tasks    []dao.Task
 	Config   dao.Config
+
+	// envResolver evaluates command substitutions lazily at real execution
+	// time, once per definition for the whole batch. nil until a run starts,
+	// so parsing, listing, checking, TUI browsing and dry-run stay side-effect free.
+	envResolver *dao.EnvResolver
 }
 
 type TableCmd struct {
@@ -29,10 +33,11 @@ type TableCmd struct {
 	desc     string
 	name     string
 	shell    string
-	env      []string
+	env      []dao.EnvVar
 	cmd      string
 	cmdArr   []string
 	numTasks int
+	resolver *dao.EnvResolver
 }
 
 func (exec *Exec) Run(
@@ -54,6 +59,9 @@ func (exec *Exec) Run(
 	if err != nil {
 		return err
 	}
+
+	// Dynamic env values are evaluated only during real execution below.
+	exec.envResolver = dao.NewEnvResolver()
 
 	// Describe task
 	if runFlags.Describe {
@@ -99,6 +107,9 @@ func (exec *Exec) RunTUI(
 	}
 
 	tasks := exec.Tasks
+
+	// Dynamic env values are evaluated only during real execution below.
+	exec.envResolver = dao.NewEnvResolver()
 
 	clientCh := make(chan Client, len(projects))
 	errCh := make(chan error, len(projects))
@@ -173,22 +184,24 @@ func (exec *Exec) SetClients(
 // It handles theme, specification, environment variables, and execution settings for each task.
 //
 // The function performs these operations for each task:
-// 1. Evaluates configuration environment variables
+// 1. Merges configuration environment variables (as raw expressions)
 // 2. Updates theme if specified
 // 3. Updates spec settings if provided
 // 4. Applies runtime execution flags
-// 5. Processes environment variables for the task and its commands
+// 5. Merges environment variables for the task and its commands
 //
-// Environment variable processing order:
-// 1. Configuration level variables
-// 2. Task level variables
-// 3. Command level variables
-// 4. User provided arguments
+// No command substitution is executed here: expressions are preserved and
+// evaluated lazily when a command really runs (see EnvResolver).
+//
+// Environment variable precedence (highest first):
+// 1. User provided arguments
+// 2. Command level variables
+// 3. Task level variables
+// 4. Configuration level variables
+// (project level variables are merged at execution time)
 func (exec *Exec) ParseTask(userArgs []string, runFlags *core.RunFlags, setRunFlags *core.SetRunFlags) error {
-	configEnv, err := dao.EvaluateEnv(exec.Config.EnvList)
-	if err != nil {
-		return err
-	}
+	configEnv := exec.Config.EnvList
+	userEnv := dao.ParseUserEnv(userArgs)
 
 	for i := range exec.Tasks {
 		// Update theme property if user flag is provided
@@ -246,21 +259,26 @@ func (exec *Exec) ParseTask(userArgs []string, runFlags *core.RunFlags, setRunFl
 			exec.Tasks[i].SpecData.Forks = runFlags.Forks
 		}
 
-		// Parse env here instead of config since we're only interested in tasks run, and not all tasks.
-		// Also, userArgs is not present in the config.
-		envs, err := dao.ParseTaskEnv(exec.Tasks[i].Env, userArgs, []string{}, configEnv)
-		if err != nil {
-			return err
-		}
-		exec.Tasks[i].EnvList = envs
+		// Merge env here instead of at config parse since we're only
+		// interested in tasks run, and not all tasks. Also, userArgs is
+		// not present in the config. Expressions stay raw.
+		exec.Tasks[i].EnvList = dao.ParseTaskEnv(
+			exec.Tasks[i].Env,
+			exec.Tasks[i].GetContext(),
+			userEnv,
+			nil,
+			configEnv,
+		)
 
 		// Set environment variables for sub-commands
 		for j := range exec.Tasks[i].Commands {
-			envs, err := dao.ParseTaskEnv(exec.Tasks[i].Commands[j].Env, userArgs, exec.Tasks[i].EnvList, configEnv)
-			if err != nil {
-				return err
-			}
-			exec.Tasks[i].Commands[j].EnvList = envs
+			exec.Tasks[i].Commands[j].EnvList = dao.ParseTaskEnv(
+				exec.Tasks[i].Commands[j].Env,
+				exec.Tasks[i].GetContext(),
+				userEnv,
+				exec.Tasks[i].EnvList,
+				configEnv,
+			)
 		}
 	}
 
@@ -271,8 +289,7 @@ func (exec *Exec) CheckTaskNoColor() {
 	task := exec.Tasks[0]
 
 	for _, env := range task.EnvList {
-		name := strings.Split(env, "=")[0]
-		if name == "NO_COLOR" {
+		if env.Name == "NO_COLOR" {
 			color.Disable()
 			break
 		}

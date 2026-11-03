@@ -27,7 +27,7 @@ type Command struct {
 	TaskRef string    `yaml:"-"` // Keep a reference to the task
 	TTY     bool      `yaml:"tty"`
 	Env     yaml.Node `yaml:"env"`
-	EnvList []string  `yaml:"-"`
+	EnvList []EnvVar  `yaml:"-"`
 
 	// Internal
 	ShellProgram string   `yaml:"-"` // should be in the format: <program>, example: "sh", "node"
@@ -44,7 +44,7 @@ type Task struct {
 	Shell    string    `yaml:"shell"`
 	Cmd      string    `yaml:"cmd"`
 	Commands []Command `yaml:"commands"`
-	EnvList  []string  `yaml:"-"`
+	EnvList  []EnvVar  `yaml:"-"`
 	TTY      bool      `yaml:"tty"`
 
 	Env    yaml.Node `yaml:"env"`
@@ -264,39 +264,32 @@ func (c *Config) GetTaskList() ([]Task, []ResourceErrors[Task]) {
 	return tasks, nil
 }
 
+// ParseTaskEnv merges the raw env definitions applicable to a task or
+// command without executing any command substitution. The returned list
+// keeps expressions and their origins so they can be displayed as-is and
+// evaluated later (see EnvResolver), only when the command really runs.
+//
+// Precedence (highest first): user args > node env > parent (task) env >
+// config env. Parent definitions are passed through as definitions, their
+// (later) evaluated values are never re-interpreted as commands.
 func ParseTaskEnv(
 	env yaml.Node,
-	userEnv []string,
-	parentEnv []string,
-	configEnv []string,
-) ([]string, error) {
-	cmdEnv, err := EvaluateEnv(ParseNodeEnv(env))
-	if err != nil {
-		return []string{}, err
-	}
-
-	pEnv, err := EvaluateEnv(parentEnv)
-	if err != nil {
-		return []string{}, err
-	}
-
-	envList := MergeEnvs(userEnv, cmdEnv, pEnv, configEnv)
-
-	return envList, nil
+	context string,
+	userEnv []EnvVar,
+	parentEnv []EnvVar,
+	configEnv []EnvVar,
+) []EnvVar {
+	return MergeEnvs(userEnv, ParseNodeEnv(env, context), parentEnv, configEnv)
 }
 
+// ParseTasksEnv populates EnvList with raw env definitions for display
+// purposes (describe, TUI). No command substitution is ever executed.
 func ParseTasksEnv(tasks []Task) {
 	for i := range tasks {
-		envs, err := ParseTaskEnv(tasks[i].Env, []string{}, []string{}, []string{})
-		core.CheckIfError(err)
-
-		tasks[i].EnvList = envs
+		tasks[i].EnvList = ParseNodeEnv(tasks[i].Env, tasks[i].context)
 
 		for j := range tasks[i].Commands {
-			envs, err = ParseTaskEnv(tasks[i].Commands[j].Env, []string{}, []string{}, []string{})
-			core.CheckIfError(err)
-
-			tasks[i].Commands[j].EnvList = envs
+			tasks[i].Commands[j].EnvList = ParseNodeEnv(tasks[i].Commands[j].Env, tasks[i].context)
 		}
 	}
 }

@@ -180,14 +180,13 @@ func printCmd(cmd string) string {
 	return output
 }
 
-func printEnv(env []string, block dao.Block) string {
+func printEnv(env []dao.EnvVar, block dao.Block) string {
 	output := ""
 
 	output += printKeyValue(false, "", "env", ":", "", *block.Key, *block.Value)
 
 	for _, env := range env {
-		parts := strings.SplitN(strings.TrimSuffix(env, "\n"), "=", 2)
-		output += printKeyValue(true, "", parts[0], ":", parts[1], *block.Key, *block.Value)
+		output += printKeyValue(true, "", env.Name, ":", env.Value, *block.Key, *block.Value)
 	}
 
 	return output

@@ -115,19 +115,24 @@ func (exec *Exec) TableWork(rIndex int, dryRun bool, data dao.TableOutput, dataM
 	var wg sync.WaitGroup
 
 	for j, cmd := range task.Commands {
-		args := TableCmd{
-			rIndex: rIndex,
-			cIndex: j + 1,
-			client: client,
-			dryRun: dryRun,
-			shell:  cmd.ShellProgram,
-			env:    cmd.EnvList,
-			cmd:    cmd.Cmd,
-			cmdArr: cmd.CmdArg,
+		if cmd.TTY {
+			envs, err := exec.envResolver.Resolve(cmd.EnvList)
+			if err != nil {
+				return err
+			}
+			return ExecTTY(cmd.Cmd, envs)
 		}
 
-		if cmd.TTY {
-			return ExecTTY(cmd.Cmd, cmd.EnvList)
+		args := TableCmd{
+			rIndex:   rIndex,
+			cIndex:   j + 1,
+			client:   client,
+			dryRun:   dryRun,
+			shell:    cmd.ShellProgram,
+			env:      cmd.EnvList,
+			cmd:      cmd.Cmd,
+			cmdArr:   cmd.CmdArg,
+			resolver: exec.envResolver,
 		}
 
 		err := RunTableCmd(args, data, dataMutex, &wg)
@@ -137,19 +142,24 @@ func (exec *Exec) TableWork(rIndex int, dryRun bool, data dao.TableOutput, dataM
 	}
 
 	if task.Cmd != "" {
-		args := TableCmd{
-			rIndex: rIndex,
-			cIndex: len(task.Commands) + 1,
-			client: client,
-			dryRun: dryRun,
-			shell:  task.ShellProgram,
-			env:    task.EnvList,
-			cmd:    task.Cmd,
-			cmdArr: task.CmdArg,
+		if task.TTY {
+			envs, err := exec.envResolver.Resolve(task.EnvList)
+			if err != nil {
+				return err
+			}
+			return ExecTTY(task.Cmd, envs)
 		}
 
-		if task.TTY {
-			return ExecTTY(task.Cmd, task.EnvList)
+		args := TableCmd{
+			rIndex:   rIndex,
+			cIndex:   len(task.Commands) + 1,
+			client:   client,
+			dryRun:   dryRun,
+			shell:    task.ShellProgram,
+			env:      task.EnvList,
+			cmd:      task.Cmd,
+			cmdArr:   task.CmdArg,
+			resolver: exec.envResolver,
 		}
 
 		err := RunTableCmd(args, data, dataMutex, &wg)
@@ -167,11 +177,23 @@ func RunTableCmd(t TableCmd, data dao.TableOutput, dataMutex *sync.RWMutex, wg *
 	combinedEnvs := dao.MergeEnvs(t.client.Env, t.env)
 
 	if t.dryRun {
+		// Preview: fill in the command but do not evaluate any env
+		// command substitutions.
 		data.Rows[t.rIndex].Columns[t.cIndex] = t.cmd
 		return nil
 	}
 
-	err := t.client.Run(t.shell, combinedEnvs, t.cmdArr)
+	// Real execution: evaluate only the effective variables now.
+	envs, err := t.resolver.Resolve(combinedEnvs)
+	if err != nil {
+		dataMutex.Lock()
+		data.Rows[t.rIndex].Columns[t.cIndex] = err.Error()
+		dataMutex.Unlock()
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		return err
+	}
+
+	err = t.client.Run(t.shell, envs, t.cmdArr)
 	if err != nil {
 		return err
 	}

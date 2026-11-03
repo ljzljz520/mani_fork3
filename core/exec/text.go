@@ -70,6 +70,18 @@ func (exec *Exec) TextWork(
 
 	var wg sync.WaitGroup
 	for j, cmd := range task.Commands {
+		if cmd.TTY {
+			// TTY replaces the process, which is real execution: evaluate
+			// the command substitutions now (project env is not part of
+			// the TTY env, matching previous behavior).
+			envs, err := exec.envResolver.Resolve(cmd.EnvList)
+			if err != nil {
+				fmt.Fprintf(stderr, "%s%s\n", prefix, err)
+				return err
+			}
+			return ExecTTY(cmd.Cmd, envs)
+		}
+
 		args := TableCmd{
 			rIndex:   rIndex,
 			cIndex:   j,
@@ -82,10 +94,7 @@ func (exec *Exec) TextWork(
 			desc:     cmd.Desc,
 			name:     cmd.Name,
 			numTasks: numTasks,
-		}
-
-		if cmd.TTY {
-			return ExecTTY(cmd.Cmd, cmd.EnvList)
+			resolver: exec.envResolver,
 		}
 
 		err := RunTextCmd(args, task.ThemeData.Stream, prefix, task.SpecData.Parallel, &wg, stdout, stderr)
@@ -95,6 +104,15 @@ func (exec *Exec) TextWork(
 	}
 
 	if task.Cmd != "" {
+		if task.TTY {
+			envs, err := exec.envResolver.Resolve(task.EnvList)
+			if err != nil {
+				fmt.Fprintf(stderr, "%s%s\n", prefix, err)
+				return err
+			}
+			return ExecTTY(task.Cmd, envs)
+		}
+
 		args := TableCmd{
 			rIndex:   rIndex,
 			cIndex:   len(task.Commands),
@@ -107,10 +125,7 @@ func (exec *Exec) TextWork(
 			desc:     task.Desc,
 			name:     task.Name,
 			numTasks: numTasks,
-		}
-
-		if task.TTY {
-			return ExecTTY(task.Cmd, task.EnvList)
+			resolver: exec.envResolver,
 		}
 
 		err := RunTextCmd(args, task.ThemeData.Stream, prefix, task.SpecData.Parallel, &wg, stdout, stderr)
@@ -140,11 +155,20 @@ func RunTextCmd(
 	}
 
 	if t.dryRun {
+		// Preview: show the command but do not evaluate any env command
+		// substitutions.
 		printCmd(prefix, t.cmd)
 		return nil
 	}
 
-	err := t.client.Run(t.shell, combinedEnvs, t.cmdArr)
+	// Real execution: evaluate only the effective variables now.
+	envs, err := t.resolver.Resolve(combinedEnvs)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s%s\n", prefix, err)
+		return err
+	}
+
+	err = t.client.Run(t.shell, envs, t.cmdArr)
 	if err != nil {
 		return err
 	}

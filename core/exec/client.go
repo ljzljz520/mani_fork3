@@ -5,13 +5,15 @@ import (
 	"io"
 	"os"
 	"os/exec"
+
+	"github.com/alajmo/mani/core/dao"
 )
 
 // Client is a wrapper over the SSH connection/sessions.
 type Client struct {
 	Name string
 	Path string
-	Env  []string
+	Env  []dao.EnvVar // raw definitions, evaluated at real execution time
 
 	cmd     *exec.Cmd
 	stdout  io.Reader

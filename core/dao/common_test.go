@@ -1,6 +1,7 @@
 package dao
 
 import (
+	"reflect"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -10,21 +11,21 @@ func TestEnv_ParseNodeEnv(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    yaml.Node
-		expected []string
+		expected []EnvVar
 	}{
 		{
-			name: "basic env variables",
+			name: "basic env variables keep raw expressions and origin",
 			input: yaml.Node{
 				Content: []*yaml.Node{
 					{Value: "KEY1"},
-					{Value: "value1"},
+					{Value: "value1", Line: 2},
 					{Value: "KEY2"},
-					{Value: "value2"},
+					{Value: "$(echo 123)", Line: 3},
 				},
 			},
-			expected: []string{
-				"KEY1=value1",
-				"KEY2=value2",
+			expected: []EnvVar{
+				{Name: "KEY1", Value: "value1", Context: "mani.yaml", Line: 2},
+				{Name: "KEY2", Value: "$(echo 123)", Context: "mani.yaml", Line: 3},
 			},
 		},
 		{
@@ -32,29 +33,29 @@ func TestEnv_ParseNodeEnv(t *testing.T) {
 			input: yaml.Node{
 				Content: []*yaml.Node{},
 			},
-			expected: []string{},
+			expected: nil,
 		},
 		{
 			name: "env with special characters",
 			input: yaml.Node{
 				Content: []*yaml.Node{
 					{Value: "PATH"},
-					{Value: "/usr/bin:/bin"},
+					{Value: "/usr/bin:/bin", Line: 10},
 					{Value: "URL"},
-					{Value: "http://example.com"},
+					{Value: "http://example.com", Line: 11},
 				},
 			},
-			expected: []string{
-				"PATH=/usr/bin:/bin",
-				"URL=http://example.com",
+			expected: []EnvVar{
+				{Name: "PATH", Value: "/usr/bin:/bin", Context: "mani.yaml", Line: 10},
+				{Name: "URL", Value: "http://example.com", Context: "mani.yaml", Line: 11},
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ParseNodeEnv(tt.input)
-			if !equalStringSlices(result, tt.expected) {
+			result := ParseNodeEnv(tt.input, "mani.yaml")
+			if !reflect.DeepEqual(result, tt.expected) {
 				t.Errorf("expected %v, got %v", tt.expected, result)
 			}
 		})
@@ -64,62 +65,62 @@ func TestEnv_ParseNodeEnv(t *testing.T) {
 func TestEnv_MergeEnvs(t *testing.T) {
 	tests := []struct {
 		name     string
-		inputs   [][]string
-		expected []string
+		inputs   [][]EnvVar
+		expected []EnvVar
 	}{
 		{
 			name: "basic merge",
-			inputs: [][]string{
-				{"KEY1=value1", "KEY2=value2"},
-				{"KEY3=value3"},
+			inputs: [][]EnvVar{
+				{{Name: "KEY1", Value: "value1"}, {Name: "KEY2", Value: "value2"}},
+				{{Name: "KEY3", Value: "value3"}},
 			},
-			expected: []string{
-				"KEY1=value1",
-				"KEY2=value2",
-				"KEY3=value3",
+			expected: []EnvVar{
+				{Name: "KEY1", Value: "value1"},
+				{Name: "KEY2", Value: "value2"},
+				{Name: "KEY3", Value: "value3"},
 			},
 		},
 		{
-			name: "override priority",
-			inputs: [][]string{
-				{"KEY1=override"},
-				{"KEY1=original", "KEY2=value2"},
+			name: "override priority keeps raw expression of the first group",
+			inputs: [][]EnvVar{
+				{{Name: "KEY1", Value: "$(echo override)", Context: "task.yaml", Line: 4}},
+				{{Name: "KEY1", Value: "original"}, {Name: "KEY2", Value: "value2"}},
 			},
-			expected: []string{
-				"KEY1=override",
-				"KEY2=value2",
+			expected: []EnvVar{
+				{Name: "KEY1", Value: "$(echo override)", Context: "task.yaml", Line: 4},
+				{Name: "KEY2", Value: "value2"},
 			},
 		},
 		{
 			name: "empty inputs",
-			inputs: [][]string{
+			inputs: [][]EnvVar{
 				{},
 				{},
 			},
-			expected: []string{},
+			expected: nil,
 		},
 		{
-			name: "with newline characters",
-			inputs: [][]string{
-				{"KEY1=value1\n", "KEY2=value2\n"},
-				{"KEY3=value3\n"},
+			name: "trailing newlines are trimmed",
+			inputs: [][]EnvVar{
+				{{Name: "KEY1", Value: "value1\n"}, {Name: "KEY2", Value: "value2\n"}},
+				{{Name: "KEY3", Value: "value3\n"}},
 			},
-			expected: []string{
-				"KEY1=value1",
-				"KEY2=value2",
-				"KEY3=value3",
+			expected: []EnvVar{
+				{Name: "KEY1", Value: "value1"},
+				{Name: "KEY2", Value: "value2"},
+				{Name: "KEY3", Value: "value3"},
 			},
 		},
 		{
 			name: "complex values",
-			inputs: [][]string{
-				{"PATH=/usr/bin:/bin", "URL=http://example.com"},
-				{"DEBUG=true", "PATH=/custom/path"},
+			inputs: [][]EnvVar{
+				{{Name: "PATH", Value: "/usr/bin:/bin"}, {Name: "URL", Value: "http://example.com"}},
+				{{Name: "DEBUG", Value: "true"}, {Name: "PATH", Value: "/custom/path"}},
 			},
-			expected: []string{
-				"PATH=/usr/bin:/bin",
-				"URL=http://example.com",
-				"DEBUG=true",
+			expected: []EnvVar{
+				{Name: "PATH", Value: "/usr/bin:/bin"},
+				{Name: "URL", Value: "http://example.com"},
+				{Name: "DEBUG", Value: "true"},
 			},
 		},
 	}
@@ -127,8 +128,37 @@ func TestEnv_MergeEnvs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := MergeEnvs(tt.inputs...)
-			if !equalStringSlices(result, tt.expected) {
+			if !reflect.DeepEqual(result, tt.expected) {
 				t.Errorf("expected %v, got %v", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestEnvVar_DynamicCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		cmd     string
+		dynamic bool
+	}{
+		{name: "plain literal", value: "bar", dynamic: false},
+		{name: "substitution", value: "$(date)", cmd: "date", dynamic: true},
+		{name: "substitution with spaces", value: "$(echo 123) ", cmd: "", dynamic: false},
+		{name: "only prefix", value: "$(date", dynamic: false},
+		{name: "only suffix", value: "date)", dynamic: false},
+		{name: "embedded substitution stays literal", value: "x$(date)y", dynamic: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := EnvVar{Value: tt.value}
+			cmd, dynamic := e.DynamicCommand()
+			if dynamic != tt.dynamic {
+				t.Errorf("expected dynamic=%v, got %v", tt.dynamic, dynamic)
+			}
+			if dynamic && cmd != tt.cmd {
+				t.Errorf("expected cmd=%q, got %q", tt.cmd, cmd)
 			}
 		})
 	}

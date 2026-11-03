@@ -57,7 +57,7 @@ type ConfigResources struct {
 	Targets  []Target
 	Tasks    []Task
 	Projects []Project
-	Envs     []string
+	Envs     []EnvVar
 
 	ThemeErrors   []ResourceErrors[Theme]
 	SpecErrors    []ResourceErrors[Spec]

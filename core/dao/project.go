@@ -25,7 +25,7 @@ type Project struct {
 	SingleBranch *bool    `yaml:"single_branch"`
 	Sync         *bool    `yaml:"sync"`
 	Tags         []string `yaml:"tags"`
-	EnvList      []string `yaml:"-"`
+	EnvList      []EnvVar `yaml:"-"`
 	RemoteList   []Remote `yaml:"-"`
 
 	Env          yaml.Node  `yaml:"env"`
@@ -130,16 +130,9 @@ func (c *Config) GetProjectList() ([]Project, []ResourceErrors[Project]) {
 			continue
 		}
 
-		envList := []string{}
-		projectEnvs, err := EvaluateEnv(ParseNodeEnv(project.Env))
-		if err != nil {
-			foundErrors = true
-			projectError := ResourceErrors[Project]{Resource: project, Errors: core.StringsToErrors(err.(*yaml.TypeError).Errors)}
-			projectErrors = append(projectErrors, projectError)
-			continue
-		}
-		envList = append(envList, projectEnvs...)
-		project.EnvList = envList
+		// Keep env expressions raw: command substitutions are evaluated
+		// lazily, only if the project is selected and a task actually runs.
+		project.EnvList = ParseNodeEnv(project.Env, c.Path)
 
 		projectRemotes := ParseRemotes(project.Remotes)
 		project.RemoteList = projectRemotes

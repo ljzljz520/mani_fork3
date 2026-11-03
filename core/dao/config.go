@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"text/template"
 
 	"github.com/alajmo/mani/core"
@@ -60,7 +59,7 @@ var (
 
 type Config struct {
 	// Internal
-	EnvList        []string  `yaml:"-"`
+	EnvList        []EnvVar  `yaml:"-"`
 	ImportData     []Import  `yaml:"-"`
 	ThemeList      []Theme   `yaml:"-"`
 	SpecList       []Spec    `yaml:"-"`
@@ -97,16 +96,10 @@ func (c *Config) GetContextLine() int {
 	return -1
 }
 
-// Returns the config env list as a string splice in the form [key=value, key1=$(echo 123)]
-func (c Config) GetEnvList() []string {
-	var envs []string
-	count := len(c.Env.Content)
-	for i := 0; i < count; i += 2 {
-		env := fmt.Sprintf("%v=%v", c.Env.Content[i].Value, c.Env.Content[i+1].Value)
-		envs = append(envs, env)
-	}
-
-	return envs
+// GetEnvList returns the config-level env definitions as raw expressions,
+// e.g. [key=value, key1=$(echo 123)]. No command substitution is executed.
+func (c Config) GetEnvList() []EnvVar {
+	return ParseNodeEnv(c.Env, c.Path)
 }
 
 func getUserConfigFile(userConfigPath string) *string {
@@ -630,8 +623,7 @@ func CheckUserColor(colorFlag bool) bool {
 
 func (c *Config) CheckConfigNoColor() {
 	for _, env := range c.EnvList {
-		name := strings.Split(env, "=")[0]
-		if name == "NO_COLOR" {
+		if env.Name == "NO_COLOR" {
 			color.Disable()
 		}
 	}

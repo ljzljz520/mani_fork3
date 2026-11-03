@@ -11,10 +11,30 @@ import (
 type ConfigEnvFailed struct {
 	Name string
 	Err  string
+
+	// Context is the config file the variable was defined in and Line the
+	// line of its value node, so lazy evaluation failures point back to the
+	// original config definition.
+	Context string
+	Line    int
 }
 
 func (c *ConfigEnvFailed) Error() string {
-	return fmt.Sprintf("failed to evaluate env `%s` \n  %s", c.Name, c.Err)
+	msg := fmt.Sprintf("failed to evaluate env `%s`", c.Name)
+
+	if c.Context != "" {
+		if c.Line > 0 {
+			msg = fmt.Sprintf("%s defined in %s:%d", msg, c.Context, c.Line)
+		} else {
+			msg = fmt.Sprintf("%s defined in %s", msg, c.Context)
+		}
+	}
+
+	if c.Err != "" {
+		msg = fmt.Sprintf("%s\n  %s", msg, c.Err)
+	}
+
+	return msg
 }
 
 type AlreadyManiDirectory struct {
